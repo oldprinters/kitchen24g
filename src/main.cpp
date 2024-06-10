@@ -42,7 +42,8 @@ const int PinOutDis{21};
 Timer t1(750);
 bool ledStat{true};
 bool presenceLd{false};
-uint16_t zone{0};
+int16_t zone{0};
+int16_t z{0};
 uint16_t dt{500};
 
 //--------------------------------------
@@ -146,12 +147,12 @@ void loop()
               // Serial.print(F("cm energy: "));
               // Serial.println(radar.stationaryTargetEnergy());
 
-              uint16_t z = dist / 75;
+              z = dist / 75;
               if(radar.stationaryTargetEnergy())
               if(z != zone){
                 zone = z;
+                  client.publish(msgMotion, String(z).c_str());
                 if(z < 4){
-                  client.publish(msgMotion, "1");
                   // digitalWrite(PinOutDis, LOW);
                   presenceLd = true;
                   if(z < 3){
@@ -170,7 +171,7 @@ void loop()
                   digitalWrite(PinOutPres, LOW);
                   digitalWrite(PinOutLd, LOW);
                 }
-              }
+              } 
             }
             if(radar.movingTargetDetected()){
               uint16_t distMove = radar.movingTargetDistance();
@@ -181,9 +182,13 @@ void loop()
             //   // Serial.println(radar.movingTargetEnergy());
             } else digitalWrite(PinOutDis, LOW);
             // Serial.println();
-          }// else {
-            // Serial.println(F("nothing detected"));
-          // }
+          } else {
+            if(z != zone){
+              client.publish(msgMotion,  String(z).c_str());
+              zone = -1;
+            }
+            z = -1;
+          }
         }
 
   // if(t1.getTimer()){
