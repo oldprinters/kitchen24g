@@ -6,6 +6,7 @@
 #include "NTPClient.h"
 #include <WiFiUdp.h>
 #include <PubSubClient.h>
+#include <Wire.h>
 #include <BH1750.h> 
 
 /*
@@ -30,21 +31,24 @@ const char* msgHSMotion = "hall_small/motion";
 //---------------------------------------------
 BH1750 lightMeter(0x23);  //0x5c 23
 float lux{8000};  //яркость света в помещении
+float luxOld{0};  //предыдущее значение
 //-----------------------------------------------------
-
 ld2410 radar;
 bool engineeringMode = false;
 String command;
-// const int PinInLd{18};
+bool led1_On{true};
+bool led2_On{true};
 const int PinOutLd{18};
 const int PinOutPres{19};
-const int PinOutDis{21};
+const int PinOutDis{5};
 Timer t1(750);
+Timer tLed1(5000);
+Timer tLed2(2000);
 bool ledStat{true};
 bool presenceLd{false};
 int16_t zone{0};
 int16_t z{0};
-uint16_t dt{500};
+uint16_t dt{250};
 
 //--------------------------------------
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -99,6 +103,9 @@ void setup(void)
   pinMode(PinOutLd, OUTPUT);
   Serial.begin(115200); //Feedback over Serial Monitor
   Serial.println(F("============================="));
+  Wire.begin();
+  Wire.setClock(400000); // use 400 kHz I2C
+
   delay(500); //Give a while for Serial Monitor to wake up
   radar.debug(Serial); //Uncomment to show debug information from the library on the Serial Monitor. By default this does not show sensor reads as they are very frequent.
   Serial2.begin (256000, SERIAL_8N1, 16, 17); //UART for monitoring the radar
@@ -124,73 +131,91 @@ void setup(void)
     client.setCallback(callback);
     reconnect_mqtt();
     //---------------------------
-    // if (lightMeter.begin()) {//BH1750::CONTINUOUS_HIGH_RES_MODE)) {
-    //   Serial.println(F("BH1750 Advanced begin"));
-    // }
-    // else {
-    //   Serial.println(F("Error initialising BH1750"));
-    // }
-
+    if (lightMeter.begin()) {//BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+      Serial.println(F("BH1750 Advanced begin"));
+    }
+    else {
+      Serial.println(F("Error initialising BH1750"));
+      while(1);
+    }
 }
 //********************************************************
 void loop()
 {
   reconnect_mqtt();
   radar.read(); //Always read frames from the sensor
-        if(radar.isConnected())
-        {
-          if(radar.presenceDetected()){
-            if(radar.stationaryTargetDetected()){
-              // Serial.print(F("Stationary target: "));
-              uint16_t dist = radar.stationaryTargetDistance();
-              // Serial.print(dist);
-              // Serial.print(F("cm energy: "));
-              // Serial.println(radar.stationaryTargetEnergy());
+  if(radar.isConnected()){
+    if(radar.presenceDetected()){
+      if(radar.stationaryTargetDetected()){
+        // Serial.print(F("Stationary target: "));
+        uint16_t dist = radar.stationaryTargetDistance();
+        // Serial.print(dist);
+        // Serial.print(F("cm energy: "));
+        // Serial.println(radar.stationaryTargetEnergy());
 
-              z = dist / 75;
-              if(radar.stationaryTargetEnergy())
-              if(z != zone){
-                zone = z;
-                  client.publish(msgMotion, String(z).c_str());
-                if(z < 4){
-                  // digitalWrite(PinOutDis, LOW);
-                  presenceLd = true;
-                  if(z < 3){
-                    digitalWrite(PinOutLd, HIGH);
-                  }else {
-                    digitalWrite(PinOutLd, LOW);
-                  }
-                  if(z > 2){
-                    digitalWrite(PinOutPres, HIGH);
-                  }else {
-                    digitalWrite(PinOutPres, LOW);
-                  }
-                } else {
-                  presenceLd = false;
-                  // digitalWrite(PinOutDis, HIGH);
-                  digitalWrite(PinOutPres, LOW);
-                  digitalWrite(PinOutLd, LOW);
-                }
-              } 
+        z = dist / 75;
+        if(radar.stationaryTargetEnergy())
+        if(z != zone){
+          zone = z;
+            client.publish(msgMotion, String(z).c_str());
+          if(z < 4){
+            // digitalWrite(PinOutDis, LOW);
+            presenceLd = true;
+            if(z < 3){
+              led1_On = true;
+              tLed1.setTimer();
+              digitalWrite(PinOutLd, HIGH);
+            }else {
+              digitalWrite(PinOutLd, LOW);
             }
-            if(radar.movingTargetDetected()){
-              uint16_t distMove = radar.movingTargetDistance();
-              digitalWrite(PinOutDis, HIGH);
-            //   Serial.print(F(". Moving target: "));
-            //   Serial.print(radar.movingTargetDistance());
-            //   // Serial.print(F("cm energy: "));
-            //   // Serial.println(radar.movingTargetEnergy());
-            } else digitalWrite(PinOutDis, LOW);
-            // Serial.println();
+            if(z > 2){
+              led2_On = true;
+              tLed2.setTimer();
+              digitalWrite(PinOutPres, HIGH);
+            }else {
+              digitalWrite(PinOutPres, LOW);
+            }
           } else {
-            if(z != zone){
-              client.publish(msgMotion,  String(z).c_str());
-              zone = -1;
-            }
-            z = -1;
+            presenceLd = false;
+            // digitalWrite(PinOutDis, HIGH);
+            digitalWrite(PinOutPres, LOW);
+            digitalWrite(PinOutLd, LOW);
           }
-        }
+        } 
+      }
+      if(radar.movingTargetDetected()){
+        uint16_t distMove = radar.movingTargetDistance();
+        digitalWrite(PinOutDis, HIGH);
+        tLed2.setTimer();
+        led2_On = true;
+      //   Serial.print(F(". Moving target: "));
+      //   Serial.print(radar.movingTargetDistance());
+      //   // Serial.print(F("cm energy: "));
+      //   // Serial.println(radar.movingTargetEnergy());
+      } else digitalWrite(PinOutDis, LOW);
+      // Serial.println();
+    } else {
+      if(z != zone){
+        client.publish(msgMotion,  String(z).c_str());
+        zone = -1;
+      }
+      z = -1;
+    }
+    if(tLed1.getTimer() && led1_On)
+  }
 
+  //....... измерение освещённости
+  if (t1.getTimer() && lightMeter.measurementReady()) {
+    lux = lightMeter.readLightLevel();
+    t1.setTimer(dt);
+    if(abs(lux - luxOld) > 5){
+      // if(light_1.setLux(lux))
+      client.publish(msgLight, String(lux).c_str());
+      Serial.print("lux = ");
+      Serial.println(lux);
+      luxOld = lux;
+    }
+  }
   // if(t1.getTimer()){
   //   t1.setTimer(dt);
   //   ledStat = !ledStat;
